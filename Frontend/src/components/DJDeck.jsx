@@ -1,5 +1,5 @@
 // src/components/DJDeck.jsx
-import React from 'react';
+
 import { Play, Pause, Disc } from 'lucide-react';
 import Waveform from './Waveform';
 

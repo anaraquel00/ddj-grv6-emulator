@@ -275,7 +275,6 @@ class WebDJEngine {
     }
   }
 
-
 const audioMaster = new WebDJEngine();
 
 export function useAudioEngine() {

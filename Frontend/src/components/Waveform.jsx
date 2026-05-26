@@ -1,5 +1,4 @@
-// src/components/Waveform.jsx
-import React from 'react';
+import {  } from 'react';
 
 export default function Waveform({ isPlaying, bpm, pitch, isDeckA }) {
   const strokeColor = isDeckA ? "#22d3ee" : "#22d3ee";
