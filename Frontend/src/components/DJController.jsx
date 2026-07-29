@@ -598,7 +598,7 @@ export default function DJController() {
             }`}
           >
             <span className={`w-2.5 h-2.5 rounded-full ${isRecording ? 'bg-red-500' : 'bg-zinc-500'}`}></span>
-            <span>{isRecording ? `GRAVANDO ${formatTime(recordTime)}` : 'REC REC'}</span>
+            <span>{isRecording ? `GRAVANDO ${formatTime(recordTime)}` : 'REC'}</span>
           </button>
 
           <div className="flex items-center space-x-1 bg-black/40 rounded-lg p-1 border border-zinc-800">
