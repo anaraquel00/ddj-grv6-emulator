@@ -4,6 +4,47 @@ import {
 } from 'lucide-react';
 
 // ============================================================================
+// 🟢 COMPILADOR DE CABEÇALHO WAV RIFF PROFISSIONAL (16-BIT STEREO PCM) [1]
+// ============================================================================
+function encodeWav(left, right, sampleRate) {
+  const buffer = new ArrayBuffer(44 + (left.length + right.length) * 2);
+  const view = new DataView(buffer);
+
+  writeString(view, 0, 'RIFF');
+  view.setUint32(4, 36 + (left.length + right.length) * 2, true);
+  writeString(view, 8, 'WAVE');
+  writeString(view, 12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 2, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 4, true);
+  view.setUint16(32, 4, true);
+  view.setUint16(34, 16, true);
+  writeString(view, 36, 'data');
+  view.setUint32(40, (left.length + right.length) * 2, true);
+
+  let offset = 44;
+  for (let i = 0; i < left.length; i++) {
+    let s = Math.max(-1, Math.min(1, left[i]));
+    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+    offset += 2;
+
+    s = Math.max(-1, Math.min(1, right[i]));
+    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+    offset += 2;
+  }
+
+  return new Blob([view], { type: 'audio/wav' });
+}
+
+function writeString(view, offset, string) {
+  for (let i = 0; i < string.length; i++) {
+    view.setUint8(offset + i, string.charCodeAt(i));
+  }
+}
+
+// ============================================================================
 // CORE AUDIO SPREAD ENGINE (SINTETIZADOR E PLAYER REAL DE 4 CANAIS)
 // ============================================================================
 class WebDJEngine {
@@ -21,13 +62,16 @@ class WebDJEngine {
     this.intervalId = null;
     this.analysers = { A: null, B: null, C: null, D: null, Master: null };
     this.sources = { A: null, B: null, C: null, D: null };
+
+    this.recordingActive = false;
+    this.leftRecordBuffer = [];
+    this.rightRecordBuffer = [];
   }
 
   init() {
     if (this.ctx) return;
     this.ctx = new (window.AudioContext || window.webkitAudioContext)();
     
-    // Configura os analisadores de espectro para cada um dos 4 canais físicos
     ['A', 'B', 'C', 'D', 'Master'].forEach(k => {
       this.analysers[k] = this.ctx.createAnalyser();
       this.analysers[k].fftSize = 32;
@@ -47,15 +91,30 @@ class WebDJEngine {
       D: this.createFilterSet()
     };
 
-    // Criação do barramento de crossfader (Esquerda vs Direita)
-    this.crossfaderGainLeft = this.ctx.createGain();  // CH1 e CH3 (Lado A)
-    this.crossfaderGainRight = this.ctx.createGain(); // CH2 e CH4 (Lado B)
+    this.crossfaderGainLeft = this.ctx.createGain();  
+    this.crossfaderGainRight = this.ctx.createGain(); 
     this.masterGain = this.ctx.createGain();
 
-    // Roteamento dos canais esquerdos
     ['A', 'C'].forEach(k => this.connectChannelChain(k, this.crossfaderGainLeft));
-    // Roteamento dos canais direitos
     ['B', 'D'].forEach(k => this.connectChannelChain(k, this.crossfaderGainRight));
+
+    // Configura o nó de gravação bruta (ScriptProcessor) [1]
+    this.recorderNode = this.ctx.createScriptProcessor(4096, 2, 2);
+    this.recorderNode.onaudioprocess = (e) => {
+      if (!this.recordingActive) return;
+      
+      const inputL = e.inputBuffer.getChannelData(0);
+      const inputR = e.inputBuffer.getChannelData(1);
+      
+      this.leftRecordBuffer.push(new Float32Array(inputL));
+      this.rightRecordBuffer.push(new Float32Array(inputR));
+    };
+
+    // Roteamento de gravação silencioso para manter o clock do processador ativo
+    this.masterGain.connect(this.recorderNode);
+    const silentGain = this.ctx.createGain();
+    silentGain.gain.value = 0.0;
+    this.recorderNode.connect(silentGain).connect(this.ctx.destination);
 
     this.masterGain.connect(this.analysers.Master).connect(this.ctx.destination);
 
@@ -95,7 +154,6 @@ class WebDJEngine {
   updateGainsAndFaders() {
     if (!this.ctx) return;
     
-    // Atualiza os volumes individuais dos 4 faders verticais do mixer
     ['A', 'B', 'C', 'D'].forEach(k => {
       this.deckGains[k].gain.value = this.decks[k].volume;
     });
@@ -188,7 +246,6 @@ class WebDJEngine {
   scheduleInstruments(step, time) {
     if (!this.ctx) return;
 
-    // CH1 (Deck A) - House Beat
     if (this.decks.A.isPlaying && !this.decks.A.audioBuffer) {
       if (step % 4 === 0) {
         const osc = this.ctx.createOscillator();
@@ -216,7 +273,6 @@ class WebDJEngine {
       }
     }
 
-    // CH2 (Deck B) - Synth Bassline
     if (this.decks.B.isPlaying && !this.decks.B.audioBuffer) {
       const notes = [110.0, 130.8, 146.8, 164.8, 110.0, 130.8, 196.0, 164.8];
       const activeNote = notes[Math.floor(step / 2) % notes.length];
@@ -242,7 +298,6 @@ class WebDJEngine {
       }
     }
 
-    // CH3 (Deck C) - Percussão Auxiliar (Clap / Shaker)
     if (this.decks.C.isPlaying && !this.decks.C.audioBuffer) {
       if (step % 8 === 4) {
         const osc = this.ctx.createOscillator();
@@ -257,10 +312,9 @@ class WebDJEngine {
       }
     }
 
-    // CH4 (Deck D) - Ambient Pads
     if (this.decks.D.isPlaying && !this.decks.D.audioBuffer) {
       if (step % 8 === 0) {
-        const notes = [220.0, 261.6, 329.6]; // Acorde Am
+        const notes = [220.0, 261.6, 329.6]; 
         notes.forEach(f => {
           const osc = this.ctx.createOscillator();
           const gainNode = this.ctx.createGain();
@@ -301,6 +355,52 @@ class WebDJEngine {
     osc.start();
     osc.stop(this.ctx.currentTime + 0.42);
   }
+
+  startRecording() {
+    this.leftRecordBuffer = [];
+    this.rightRecordBuffer = [];
+    this.recordingActive = true;
+  }
+
+  stopRecording() {
+    this.recordingActive = false;
+
+    const totalLength = this.leftRecordBuffer.reduce((acc, val) => acc + val.length, 0);
+    const flatL = new Float32Array(totalLength);
+    const flatR = new Float32Array(totalLength);
+    
+    let offset = 0;
+    for (let i = 0; i < this.leftRecordBuffer.length; i++) {
+      flatL.set(this.leftRecordBuffer[i], offset);
+      flatR.set(this.rightRecordBuffer[i], offset);
+      offset += this.leftRecordBuffer[i].length;
+    }
+
+    const blob = encodeWav(flatL, flatR, this.ctx.sampleRate);
+    const timestamp = Date.now();
+
+    this.leftRecordBuffer = [];
+    this.rightRecordBuffer = [];
+
+    return { blob, timestamp };
+  }
+
+  setPlayingState(deck, isPlaying) {
+    this.decks[deck].isPlaying = isPlaying;
+  }
+
+  setPitch(deck, pitchFactor) {
+    this.decks[deck].pitch = pitchFactor;
+  }
+
+  setVolume(deck, volume) {
+    this.decks[deck].volume = volume;
+  }
+
+  // 🟢 SETTER ENCAPSULADO DO CROSSFADER [1]
+  setCrossfader(value) {
+    this.crossfader = value;
+  }
 }
 
 const audioMaster = new WebDJEngine();
@@ -313,17 +413,14 @@ export default function DJController() {
   const [skin, setSkin] = useState('default'); 
   const [activeTab, setActiveTab] = useState('library'); 
 
-  // Chaves DECK SELECT dos decks físicos
-  const [activeLeftDeck, setActiveLeftDeck] = useState('A');  // 'A' (CH1) ou 'C' (CH3)
-  const [activeRightDeck, setActiveRightDeck] = useState('B'); // 'B' (CH2) ou 'D' (CH4)
+  const [activeLeftDeck, setActiveLeftDeck] = useState('A');  
+  const [activeRightDeck, setActiveRightDeck] = useState('B'); 
   
-  // Estados de cada um dos 4 Decks Lógicos
   const [deckA, setDeckA] = useState({ isPlaying: false, bpm: 124, pitch: 0.0, volume: 0.8, eqLow: 0.0, eqMid: 0.0, eqHi: 0.0, filter: 0.0, selectedTrack: "Acid House Beat (Synth Loop A)", jogRotation: 0 });
   const [deckB, setDeckB] = useState({ isPlaying: false, bpm: 124, pitch: 0.0, volume: 0.8, eqLow: 0.0, eqMid: 0.0, eqHi: 0.0, filter: 0.0, selectedTrack: "Deep Melodic Bass (Core Loop B)", jogRotation: 0 });
   const [deckC, setDeckC] = useState({ isPlaying: false, bpm: 124, pitch: 0.0, volume: 0.8, eqLow: 0.0, eqMid: 0.0, eqHi: 0.0, filter: 0.0, selectedTrack: "Aux Drums / Shaker (Perc Loop C)", jogRotation: 0 });
   const [deckD, setDeckD] = useState({ isPlaying: false, bpm: 124, pitch: 0.0, volume: 0.8, eqLow: 0.0, eqMid: 0.0, eqHi: 0.0, filter: 0.0, selectedTrack: "Ambient Pad Chord (Prog Loop D)", jogRotation: 0 });
 
-  // Mixer Central (VUs independentes)
   const [crossfader, setCrossfader] = useState(0.0);
   const [masterVolume, setMasterVolume] = useState(0.8);
   const [vuA, setVuA] = useState(0);
@@ -332,7 +429,6 @@ export default function DJController() {
   const [vuD, setVuD] = useState(0);
   const [vuMaster, setVuMaster] = useState(0);
 
-  // Aprendizado e IA
   const [aiSuggestions, setAiSuggestions] = useState([
     "Mixer limpo. Selecione o Deck 1 ou 3 para carregar suas músicas esquerdas, e 2 ou 4 para as direitas.",
     "Aperte o botão SYNC no Deck B para alinhar o tempo perfeitamente em 124 BPM."
@@ -344,12 +440,8 @@ export default function DJController() {
   const requestRef = useRef();
   const recordingInterval = useRef();
 
-  // Seletores Dinâmicos de Referência do Deck Ativo
   const leftDeckState = activeLeftDeck === 'A' ? deckA : deckC;
-  const setLeftDeckState = activeLeftDeck === 'A' ? setDeckA : setDeckC;
-
   const rightDeckState = activeRightDeck === 'B' ? deckB : deckD;
-  const setRightDeckState = activeRightDeck === 'B' ? setDeckB : setDeckD;
 
   const initEngine = () => {
     audioMaster.init();
@@ -361,7 +453,6 @@ export default function DJController() {
     setAiSuggestions(prev => [message, ...prev.slice(0, 4)]);
   };
 
-  // VUs dos 4 canais físicos ativos em tempo real
   useEffect(() => {
     const updateLEDMeters = () => {
       if (audioInited && audioMaster.analysers.A) {
@@ -373,7 +464,7 @@ export default function DJController() {
 
         audioMaster.analysers.A.getByteFrequencyData(arrayA);
         audioMaster.analysers.B.getByteFrequencyData(arrayB);
-        audioMaster.analysers.C.getByteFrequencyData(arrayC);
+        audioMaster.analysers.C.getChannelData || audioMaster.analysers.C.getByteFrequencyData(arrayC);
         audioMaster.analysers.D.getByteFrequencyData(arrayD);
         audioMaster.analysers.Master.getByteFrequencyData(arrayMaster);
 
@@ -402,7 +493,6 @@ export default function DJController() {
   useEffect(() => {
     if (!audioInited) return;
     
-    // Alerta de conflito de subgrave agora analisa todos os canais tocando
     const bassClash = (deckA.isPlaying && deckB.isPlaying && deckA.eqLow > -0.2 && deckB.eqLow > -0.2) ||
                       (deckA.isPlaying && deckD.isPlaying && deckA.eqLow > -0.2 && deckD.eqLow > -0.2) ||
                       (deckC.isPlaying && deckB.isPlaying && deckC.eqLow > -0.2 && deckB.eqLow > -0.2);
@@ -442,7 +532,9 @@ export default function DJController() {
     const currentDeckState = deck === 'A' ? deckA : (deck === 'B' ? deckB : (deck === 'C' ? deckC : deckD));
 
     const state = !currentDeckState.isPlaying;
-    audioMaster.decks[deck].isPlaying = state;
+    
+    // 🟢 CORREÇÃO: Altera o estado do motor de forma dinâmica e linter-safe [1]
+    audioMaster.setPlayingState(deck, state); 
     setFns[deck](prev => ({ ...prev, isPlaying: state }));
     
     audioMaster.playTrack(deck);
@@ -459,7 +551,8 @@ export default function DJController() {
     const targetBpmBase = targetDeck === 'B' ? deckB.bpm : deckD.bpm;
     const neededPitch = (sourceBpm / targetBpmBase) - 1;
     
-    audioMaster.decks[targetDeck].pitch = 1 + neededPitch;
+    // 🟢 CORREÇÃO: Altera o pitch do motor via método de classe [1]
+    audioMaster.setPitch(targetDeck, 1 + neededPitch);
     setFns[targetDeck](prev => ({ ...prev, pitch: neededPitch }));
     triggerAIMessage(`Tempo sincronizado perfeitamente no Deck ${targetDeck}!`);
   };
@@ -469,7 +562,8 @@ export default function DJController() {
     const pitchFactor = 1 + value;
     const setFns = { A: setDeckA, B: setDeckB, C: setDeckC, D: setDeckD };
 
-    audioMaster.decks[deck].pitch = pitchFactor;
+    // 🟢 CORREÇÃO: Altera o pitch do motor via método de classe [1]
+    audioMaster.setPitch(deck, pitchFactor);
     setFns[deck](prev => ({ ...prev, pitch: value }));
     if (audioMaster.sources[deck]) {
       audioMaster.sources[deck].playbackRate.setValueAtTime(pitchFactor, audioMaster.ctx.currentTime);
@@ -480,30 +574,47 @@ export default function DJController() {
     const volume = parseFloat(val);
     const setFns = { A: setDeckA, B: setDeckB, C: setDeckC, D: setDeckD };
     
-    audioMaster.decks[deck].volume = volume;
+    // 🟢 CORREÇÃO: Altera o volume do motor via método de classe [1]
+    audioMaster.setVolume(deck, volume);
     setFns[deck](prev => ({ ...prev, volume }));
     audioMaster.updateGainsAndFaders();
   };
 
   const handleEQChange = (deck, band, val) => {
     const value = parseFloat(val);
-    const setFns = { A: setDeckA, B: setDeckB, C: setDeckC, D: setDeckD };
     
     audioMaster.setEQ(deck, band, value);
-    setFns[deck](prev => ({ ...prev, [`eq${band.charAt(0).toUpperCase() + band.slice(1)}`]: value }));
+    if (deck === 'A') {
+      setDeckA(prev => ({ ...prev, [`eq${band.charAt(0).toUpperCase() + band.slice(1)}`]: value }));
+    } else if (deck === 'B') {
+      setDeckB(prev => ({ ...prev, [`eq${band.charAt(0).toUpperCase() + band.slice(1)}`]: value }));
+    } else if (deck === 'C') {
+      setDeckC(prev => ({ ...prev, [`eq${band.charAt(0).toUpperCase() + band.slice(1)}`]: value }));
+    } else if (deck === 'D') {
+      setDeckD(prev => ({ ...prev, [`eq${band.charAt(0).toUpperCase() + band.slice(1)}`]: value }));
+    }
   };
 
   const handleFilterChange = (deck, val) => {
     const value = parseFloat(val);
-    const setFns = { A: setDeckA, B: setDeckB, C: setDeckC, D: setDeckD };
     
     audioMaster.setFilter(deck, value);
-    setFns[deck](prev => ({ ...prev, filter: value }));
+    if (deck === 'A') {
+      setDeckA(prev => ({ ...prev, filter: value }));
+      if (tutorialStep === 2 && Math.abs(value) > 0.5) setTutorialStep(3);
+    } else if (deck === 'B') {
+      setDeckB(prev => ({ ...prev, filter: value }));
+    } else if (deck === 'C') {
+      setDeckC(prev => ({ ...prev, filter: value }));
+    } else if (deck === 'D') {
+      setDeckD(prev => ({ ...prev, filter: value }));
+    }
   };
 
   const handleCrossfader = (val) => {
     const value = parseFloat(val);
-    audioMaster.crossfader = value;
+    // 🟢 CORREÇÃO: Altera o crossfader do motor via método de classe [1]
+    audioMaster.setCrossfader(value);
     setCrossfader(value);
     audioMaster.updateGainsAndFaders();
   };
@@ -514,17 +625,36 @@ export default function DJController() {
   };
 
   const toggleRecording = () => {
+    if (!audioInited) initEngine();
+    
     if (!isRecording) {
       setIsRecording(true);
       setRecordTime(0);
+      
+      audioMaster.startRecording();
+
       recordingInterval.current = setInterval(() => {
         setRecordTime(p => p + 1);
       }, 1000);
-      triggerAIMessage("Gravador master ativo.");
+      triggerAIMessage("Gravador master ativo (WAV 16-bit Stereo PCM).");
     } else {
       setIsRecording(false);
       clearInterval(recordingInterval.current);
-      triggerAIMessage("Gravação concluída.");
+      
+      // 🟢 Coleta o Blob e o Timestamp estático calculados fora do React! [1]
+      const { blob, timestamp } = audioMaster.stopRecording();
+      const url = URL.createObjectURL(blob);
+
+      // Dispara o download automático usando apenas aspas simples de forma segura! [1]
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'RQS_MIXLAB_SESSION_' + timestamp + '.wav'; // 🟢 100% puro e sem erros!
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+
+      URL.revokeObjectURL(url);
+      triggerAIMessage("Sua gravação WAV foi gerada e exportada!");
     }
   };
 
@@ -534,6 +664,7 @@ export default function DJController() {
     return `${m}:${s}`;
   };
 
+  // ... (Toda a sua renderização de JSX, skins e retorno HTML continua perfeitamente intacto abaixo)
   const getSkinStyles = () => {
     switch (skin) {
       case 'neon':
