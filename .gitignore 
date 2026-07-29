@@ -1,0 +1,14 @@
+# Ignora a pasta de dependências em qualquer nível (raiz ou subpastas!) [1]
+**/node_modules/
+node_modules/
+
+# Ignora pastas de distribuição compiladas em qualquer nível [1]
+**/dist/
+dist/
+
+# Ignora arquivos de variáveis de ambiente e logs em qualquer nível
+.env
+**/.env
+*.log
+.DS_Store
+.vscode/
