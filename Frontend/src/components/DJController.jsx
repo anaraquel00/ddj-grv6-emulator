@@ -641,20 +641,31 @@ export default function DJController() {
       setIsRecording(false);
       clearInterval(recordingInterval.current);
       
-      // 🟢 Coleta o Blob e o Timestamp estático calculados fora do React! [1]
+      // Coleta o Blob e o Timestamp estático calculados fora do React [1]
       const { blob, timestamp } = audioMaster.stopRecording();
       const url = URL.createObjectURL(blob);
 
-      // Dispara o download automático usando apenas aspas simples de forma segura! [1]
+      // 🟢 O PULO DO GATO: Pergunta ao usuário qual o nome da setlist [1]
+      let customName = window.prompt('Digite o nome do seu Mixset / Enter your Mixset name:', 'THE_BLUEPRINT_SESSIONS');
+      
+      // Sanitização de caracteres para evitar erros de arquivo no Windows/Linux/Mac [1]
+      if (customName) {
+        customName = customName.trim().replace(/[^a-zA-Z0-9_-]/g, '_');
+      }
+      
+      // Se o usuário cancelar ou deixar em branco, usa o fallback dinâmico padrão [1]
+      const finalName = customName ? customName : 'THE_BLUEPRINT_SESSIONS_' + timestamp;
+
+      // Dispara o download automático com o nome personalizado de forma limpa! [1]
       const a = document.createElement('a');
       a.href = url;
-      a.download = 'RQS_MIXLAB_SESSION_' + timestamp + '.wav'; // 🟢 100% puro e sem erros!
+      a.download = finalName + '.wav'; // Salva perfeitamente como .wav customizado [1]
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
 
       URL.revokeObjectURL(url);
-      triggerAIMessage("Sua gravação WAV foi gerada e exportada!");
+      triggerAIMessage("Sua gravação foi exportada como " + finalName + ".wav!");
     }
   };
 
