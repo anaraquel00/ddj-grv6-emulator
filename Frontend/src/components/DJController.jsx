@@ -582,9 +582,9 @@ export default function DJController() {
           </div>
           <div>
             <h1 className="text-xl font-black tracking-widest text-transparent bg-clip-text bg-gradient-to-r from-orange-500 via-yellow-400 to-cyan-400">
-              PIONEER DDJ-GRV6
+              RQS MIXLAB
             </h1>
-            <p className="text-xs text-zinc-400 tracking-wider font-semibold">REKORDBOX & SERATO HYBRID EMULATOR</p>
+            <p className="text-xs text-zinc-400 tracking-wider font-semibold">PROFESSIONAL DJ SIMULATOR</p>
           </div>
         </div>
 
